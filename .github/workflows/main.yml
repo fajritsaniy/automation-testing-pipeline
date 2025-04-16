@@ -1,0 +1,102 @@
+name: Run Appium Test on Github Action
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Project'
+        required: true
+        default: 'project-1'
+        type: choice
+        options:
+        - project-1
+        - project-2
+
+jobs:
+  mobile-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Results Data DB
+        uses: actions/cache@v3
+        with:
+          path: result_data/
+          key: result-data-DB
+          restore-keys: |
+            result-data-DB
+
+      - name: Cache Node modules
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node
+          restore-keys: |
+            ${{ runner.os }}-node
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.4'
+          cache: 'pip' 
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Appium 
+        run: |
+          npm install -g appium@v2.17.1
+          appium driver install uiautomator2
+          appium -v
+          appium &>/dev/null &
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v3
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-30
+
+      - name: create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: |
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -skin 540x1200 -dpi-device 280
+          disable-animations: true
+          script: echo "Generated AVD snapshot for caching."
+
+      - name: Run Robot Framework Appium Tests
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          disable-animations: true
+          emulator-options: |
+            -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -skin 540x1200 -dpi-device 280
+          script: |
+            robot -d results --loglevel TRACE -i ${{ inputs.projects }} tests
+            robotdashboard -o results/output.xml:${{ inputs.projects }} -d result_data/robot_result_database.db -n results/result_robot_dashboard.html -t "Dashboard Mobile Automation"
+
+      - name: Upload Robot Framework Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-reports
+          path: results/
